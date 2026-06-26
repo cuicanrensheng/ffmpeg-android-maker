@@ -33,11 +33,47 @@ jobs:
           export ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME
           ./ffmpeg-android-maker.sh -all-free -all-gpl -android=21 -abis=${{ matrix.abi }}
 
+      - name: 探测实际输出目录
+        id: find_output
+        run: |
+          echo "=== 查找编译产物位置 ==="
+          # 查找 libavcodec.so 来定位输出目录
+          SO_PATH=$(find . -name "libavcodec.so" -type f 2>/dev/null | head -1)
+          
+          if [ -z "$SO_PATH" ]; then
+            echo "❌ 未找到 libavcodec.so，打印全部目录结构供排查"
+            find . -type d | head -50
+            echo "=== 查找所有 .so 文件 ==="
+            find . -name "*.so" -type f 2>/dev/null | head -20
+            exit 1
+          fi
+          
+          echo "✅ 找到 so 文件: $SO_PATH"
+          
+          # 向上两级就是 ABI 目录 (lib/../)
+          ABI_DIR=$(dirname $(dirname "$SO_PATH"))
+          echo "ABI 输出目录: $ABI_DIR"
+          
+          # 规范化路径（去掉开头的 ./）
+          ABI_DIR=${ABI_DIR#./}
+          
+          echo "OUTPUT_ABI_DIR=$ABI_DIR" >> $GITHUB_ENV
+          echo "OUTPUT_ABI_DIR=$ABI_DIR" >> $GITHUB_OUTPUT
+
+      - name: 打印输出目录结构
+        run: |
+          echo "=== 输出目录结构 ==="
+          ls -la ${{ env.OUTPUT_ABI_DIR }}/
+          echo "=== lib 目录 ==="
+          ls -la ${{ env.OUTPUT_ABI_DIR }}/lib/
+          echo "=== include 目录 ==="
+          ls -la ${{ env.OUTPUT_ABI_DIR }}/include/ 2>/dev/null || echo "无include目录"
+
       - name: Upload build output ${{ matrix.abi }}
         uses: actions/upload-artifact@v4
         with:
           name: output-${{ matrix.abi }}
-          path: build-output/${{ matrix.abi }}
+          path: ${{ env.OUTPUT_ABI_DIR }}/
 
   package_aar:
     needs: build
@@ -49,31 +85,80 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: output-armeabi-v7a
-          path: build-output/armeabi-v7a
+          path: ffmpeg-libs/armeabi-v7a
 
       - name: Download arm64-v8a build output
         uses: actions/download-artifact@v4
         with:
           name: output-arm64-v8a
-          path: build-output/arm64-v8a
+          path: ffmpeg-libs/arm64-v8a
+
+      - name: 检查下载的产物结构
+        run: |
+          echo "=== armeabi-v7a ==="
+          ls -la ffmpeg-libs/armeabi-v7a/
+          echo "=== arm64-v8a ==="
+          ls -la ffmpeg-libs/arm64-v8a/
+          echo "=== armeabi-v7a lib ==="
+          ls -la ffmpeg-libs/armeabi-v7a/lib/ 2>/dev/null || ls -la ffmpeg-libs/armeabi-v7a/
+          echo "=== arm64-v8a lib ==="
+          ls -la ffmpeg-libs/arm64-v8a/lib/ 2>/dev/null || ls -la ffmpeg-libs/armeabi-v7a/
 
       - name: Package full AAR library
         run: |
+          # 创建 AAR 目录结构
           mkdir -p aar/libs/armeabi-v7a aar/libs/arm64-v8a aar/headers
-          cp -r build-output/arm64-v8a/include/* aar/headers/
-          cp build-output/armeabi-v7a/lib/lib*.so aar/libs/armeabi-v7a/
-          cp build-output/arm64-v8a/lib/lib*.so aar/libs/arm64-v8a/
+
+          # 自动查找 so 文件位置（兼容有lib目录和无lib目录两种情况）
+          find_lib_dir() {
+            if [ -d "$1/lib" ]; then
+              echo "$1/lib"
+            else
+              echo "$1"
+            fi
+          }
+
+          # 自动查找 include 目录位置
+          find_include_dir() {
+            if [ -d "$1/include" ]; then
+              echo "$1/include"
+            else
+              echo "$1"
+            fi
+          }
+
+          V7A_LIB=$(find_lib_dir "ffmpeg-libs/armeabi-v7a")
+          V8A_LIB=$(find_lib_dir "ffmpeg-libs/arm64-v8a")
+          V8A_INC=$(find_include_dir "ffmpeg-libs/arm64-v8a")
+
+          echo "armeabi-v7a lib 目录: $V7A_LIB"
+          echo "arm64-v8a lib 目录: $V8A_LIB"
+          echo "头文件目录: $V8A_INC"
+
+          # 复制头文件（以 arm64-v8a 为准）
+          cp -r $V8A_INC/* aar/headers/ 2>/dev/null || echo "警告: 未找到头文件"
+
+          # 复制动态库
+          cp $V7A_LIB/lib*.so aar/libs/armeabi-v7a/ 2>/dev/null || cp $V7A_LIB/*.so aar/libs/armeabi-v7a/ 2>/dev/null
+          cp $V8A_LIB/lib*.so aar/libs/arm64-v8a/ 2>/dev/null || cp $V8A_LIB/*.so aar/libs/arm64-v8a/ 2>/dev/null
+
+          echo "=== 复制后的 AAR 结构 ==="
+          find aar -type f | head -30
+
+          # 生成清单文件
           cat > aar/AndroidManifest.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
+          <?xml     version="1.0" encoding="utf-8"?>
           <manifest package="com.ffmpeg.lib" xmlns:android="http://schemas.android.com/apk/res/android">
           <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="36"/>
           </manifest>
-             cd aar
+           EOF
+
+          # 打包 AAR
+          cd aar
           zip -r ffmpeg-5.1.10-full-decode.aar AndroidManifest.xml libs headers
 
       - name: Upload compiled AAR
         uses: actions/upload-artifact@v4
         with:
-
           name: FFmpeg5.1.10-FullDecode-AAR
           path: aar/ffmpeg-5.1.10-full-decode.aar
