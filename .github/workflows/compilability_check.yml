@@ -1,21 +1,82 @@
-name: Compilability check
-on: [ push, pull_request ]
+name: Build FFmpeg 5.1.10 Full Decode AAR
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch: # 手动点击触发编译
+
 jobs:
   build:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        abi: [ "armeabi-v7a", "arm64-v8a", "x86", "x86_64" ]
-      fail-fast: false
+        abi: [ "armeabi-v7a", "arm64-v8a" ] # 仅保留你需要的两个ARM架构
+      fail-fast: false # 一个架构失败不终止其他架构编译
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup the environment
+      - name: Install build dependencies
         run: |
-          sudo apt install meson nasm ninja-build
+          sudo apt update -y
+          sudo apt install meson nasm ninja-build yasm git wget unzip zip tar make gcc
 
-      - name: Executing the script
+      # 自动安装Android NDK r25c（完美兼容FFmpeg5.1.10）
+      - name: Setup Android NDK r25c
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+          unzip -q android-ndk-r25c-linux.zip
+          echo "ANDROID_NDK_LATEST_HOME=$PWD/android-ndk-r25c" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$PWD/android-ndk-r25c" >> $GITHUB_ENV
+
+      - name: Compile FFmpeg ABI ${{ matrix.abi }}
         run: |
           export ANDROID_SDK_HOME=$ANDROID_HOME
           export ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME
-          ./ffmpeg-android-maker.sh -all-free -all-gpl -android=24 -abis=${{ matrix.abi }}
+          # -android=21 锁定minSdk21；保留gpl开启专利编码；abis指定当前架构
+          ./ffmpeg-android-maker.sh -all-free -all-gpl -android=21 -abis=${{ matrix.abi }}
+
+  # 全部架构编译完成后，合并所有so打包成AAR
+  package_aar:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # 下载两个架构编译产物
+      - name: Download armeabi-v7a build output
+        uses: actions/download-artifact@v4
+        with:
+          name: output-armeabi-v7a
+          path: build-output/armeabi-v7a
+      - name: Download arm64-v8a build output
+        uses: actions/download-artifact@v4
+        with:
+          name: output-arm64-v8a
+          path: build-output/arm64-v8a
+
+      # 组装标准Android AAR结构
+      - name: Package full AAR library
+        run: |
+          mkdir -p aar/libs/armeabi-v7a aar/libs/arm64-v8a aar/headers
+          # 复制头文件（以arm64-v8a为准，两者头文件完全一致）
+          cp -r build-output/arm64-v8a/include/* aar/headers/
+          # 复制动态库
+          cp build-output/armeabi-v7a/lib/lib*.so aar/libs/armeabi-v7a/
+          cp build-output/arm64-v8a/lib/lib*.so aar/libs/arm64-v8a/
+          # 生成清单文件
+          cat > aar/AndroidManifest.xml <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<manifest package="com.ffmpeg.lib" xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="36"/>
+</manifest>
+EOF
+          # 打包aar
+          cd aar
+          zip -r ffmpeg-5.1.10-full-decode.aar AndroidManifest.xml libs headers
+
+      # 上传最终AAR文件
+      - name: Upload compiled AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: FFmpeg5.1.10-FullDecode-AAR
+          path: aar/ffmpeg-5.1.10-full-decode.aar
