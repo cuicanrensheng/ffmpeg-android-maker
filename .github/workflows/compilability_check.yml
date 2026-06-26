@@ -1,4 +1,4 @@
-name: Build FFmpeg 5.1.10 Full Decode AAR
+name: Build FFmpeg 5.1.10 Lite Decode AAR
 on:
   push:
     branches: [ master ]
@@ -6,15 +6,67 @@ on:
   workflow_dispatch:
 
 env:
-  FFMPEG_FULL_DECODE_FLAGS: >-
-    --enable-decoder=all
-    --enable-encoder=all
-    --enable-demuxer=all
-    --enable-muxer=all
-    --enable-protocol=all
-    --enable-filter=all
-    --enable-parsers=all
-    --enable-bsfs=all
+  # ============================================================
+  # FFmpeg 5.1.10 精简版配置（播放器专用，约12-15MB）
+  # 保留99%场景常用格式，砍掉冷门编解码减小体积
+  # ============================================================
+  FFMPEG_LITE_FLAGS: >-
+    --disable-everything
+    --enable-decoder=h264
+    --enable-decoder=hevc
+    --enable-decoder=av1
+    --enable-decoder=vp8
+    --enable-decoder=vp9
+    --enable-decoder=mpeg4
+    --enable-decoder=mpeg2video
+    --enable-decoder=mpeg1video
+    --enable-decoder=flv
+    --enable-decoder=mjpeg
+    --enable-decoder=png
+    --enable-decoder=aac
+    --enable-decoder=aac_latm
+    --enable-decoder=mp3
+    --enable-decoder=opus
+    --enable-decoder=vorbis
+    --enable-decoder=ac3
+    --enable-decoder=eac3
+    --enable-decoder=dca
+    --enable-decoder=flac
+    --enable-decoder=alac
+    --enable-decoder=wavpack
+    --enable-decoder=pcm_s16le
+    --enable-decoder=pcm_s16be
+    --enable-demuxer=mp4
+    --enable-demuxer=mov
+    --enable-demuxer=mkv
+    --enable-demuxer=avi
+    --enable-demuxer=flv
+    --enable-demuxer=mpegts
+    --enable-demuxer=mpegps
+    --enable-demuxer=hls
+    --enable-demuxer=rtsp
+    --enable-demuxer=rtmp
+    --enable-demuxer=ogg
+    --enable-demuxer=wav
+    --enable-demuxer=mp3
+    --enable-demuxer=aac
+    --enable-demuxer=image2
+    --enable-protocol=http
+    --enable-protocol=https
+    --enable-protocol=rtmp
+    --enable-protocol=rtsp
+    --enable-protocol=file
+    --enable-protocol=tcp
+    --enable-protocol=udp
+    --enable-protocol=hls
+    --enable-filter=scale
+    --enable-filter=crop
+    --enable-filter=rotate
+    --enable-filter=transpose
+    --enable-filter=hflip
+    --enable-filter=vflip
+    --enable-filter=format
+    --enable-filter=null
     --enable-mediacodec
     --enable-jni
     --enable-hwaccels
@@ -23,7 +75,6 @@ env:
     --enable-inline-asm
     --enable-gpl
     --enable-version3
-    --enable-nonfree
     --enable-shared
     --disable-static
     --disable-programs
@@ -35,6 +86,7 @@ env:
     --disable-manpages
     --disable-podpages
     --disable-txtpages
+    --enable-stripping
 
 jobs:
   build:
@@ -62,20 +114,23 @@ jobs:
         run: |
           export ANDROID_SDK_HOME=$ANDROID_HOME
           export ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME
-          export EXTRA_BUILD_CONFIGURATION_FLAGS="${{ env.FFMPEG_FULL_DECODE_FLAGS }}"
-          echo "=== FFmpeg 全量解码配置已注入 ==="
+          export EXTRA_BUILD_CONFIGURATION_FLAGS="${{ env.FFMPEG_LITE_FLAGS }}"
+          echo "=== FFmpeg 精简版配置已注入 ==="
           echo "$EXTRA_BUILD_CONFIGURATION_FLAGS"
           ./ffmpeg-android-maker.sh -all-free -all-gpl -android=21 -abis=${{ matrix.abi }}
 
-      - name: 验证全量解码配置生效
+      - name: Strip 调试符号减小体积
         run: |
-          echo "=== 查找 FFmpeg 配置日志 ==="
-          find . -name "config.log" -type f 2>/dev/null | head -5
-          echo "=== 查找 config.h ==="
-          find . -name "config.h" -type f 2>/dev/null | head -5
-          echo "=== 统计编译生成的 so 数量 ==="
-          find . -name "libav*.so" -type f 2>/dev/null | wc -l
-          find . -name "libav*.so" -type f 2>/dev/null
+          STRIP_TOOL=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+          echo "=== 查找并 strip so 文件 ==="
+          find . -name "libav*.so" -type f 2>/dev/null | while read sofile; do
+            echo "Strip: $sofile"
+            $STRIP_TOOL "$sofile" 2>/dev/null || echo "跳过: $sofile"
+          done
+          find . -name "libsw*.so" -type f 2>/dev/null | while read sofile; do
+            echo "Strip: $sofile"
+            $STRIP_TOOL "$sofile" 2>/dev/null || echo "跳过: $sofile"
+          done
 
       - name: 探测实际输出目录
         id: find_output
@@ -114,6 +169,8 @@ jobs:
           ls -la ${{ env.OUTPUT_ABI_DIR }}/
           echo "=== 所有 .so 文件 ==="
           ls -la ${{ env.OUTPUT_ABI_DIR }}/*.so 2>/dev/null || ls -la ${{ env.OUTPUT_ABI_DIR }}/lib/*.so 2>/dev/null
+          echo "=== 各 so 文件大小 ==="
+          du -h ${{ env.OUTPUT_ABI_DIR }}/*.so 2>/dev/null || du -h ${{ env.OUTPUT_ABI_DIR }}/lib/*.so 2>/dev/null
           echo "=== include 目录 ==="
           ls -la ${{ env.OUTPUT_ABI_DIR }}/include/ 2>/dev/null || echo "无include目录"
 
@@ -188,6 +245,8 @@ jobs:
 
           echo "=== 复制后的 AAR 结构 ==="
           find aar -type f | head -30
+          echo "=== AAR 总大小 ==="
+          du -sh aar/
 
           cat > aar/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -197,10 +256,10 @@ jobs:
           EOF
 
           cd aar
-          zip -r ffmpeg-5.1.10-full-decode.aar AndroidManifest.xml libs headers
+          zip -r ffmpeg-5.1.10-lite-decode.aar AndroidManifest.xml libs headers
 
       - name: Upload compiled AAR
         uses: actions/upload-artifact@v4
         with:
-          name: FFmpeg5.1.10-FullDecode-AAR
-          path: aar/ffmpeg-5.1.10-full-decode.aar
+          name: FFmpeg5.1.10-LiteDecode-AAR
+          path: aar/ffmpeg-5.1.10-lite-decode.aar
