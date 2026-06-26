@@ -2,7 +2,7 @@ name: Build Media3 FFmpeg Extension (with video)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -10,13 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout Media3 source
-        run: |
-          echo "=== 克隆 Media3 1.7.1 ==="
-          git clone --depth 1 --branch 1.7.1 https://github.com/androidx/media.git media
-          cd media
-          echo "当前目录：$(pwd)"
-          ls -la
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -30,138 +25,76 @@ jobs:
       - name: Install NDK
         run: |
           echo "=== 安装 NDK 25.1.8937393 ==="
-          # Media3 1.7.1 build.gradle 里指定的 NDK 版本
           sdkmanager "ndk;25.1.8937393"
-          
-          echo "=== 已安装的 NDK ==="
-          ls $ANDROID_SDK_ROOT/ndk/
-          
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.1.8937393" >> $GITHUB_ENV
 
-      - name: 🔍 调试：查看项目结构
+      - name: Checkout Media3 1.7.1
         run: |
+          echo "=== 克隆 Media3 1.7.1 ==="
+          git clone --depth 1 --branch 1.7.1 https://github.com/androidx/media.git media
           cd media
-          
-          echo "=== 根目录 ==="
+          echo "当前目录：$(pwd)"
           ls -la
-          
-          echo ""
-          echo "=== 查找 decoder_ffmpeg 相关目录 ==="
-          find . -name "*decoder*ffmpeg*" -type d 2>/dev/null
-          find . -name "*ffmpeg*" -type d 2>/dev/null | head -20
-          
-          echo ""
-          echo "=== 查找 build_ffmpeg.sh ==="
-          find . -name "build_ffmpeg.sh" 2>/dev/null
-
-      - name: 🔍 调试：列出所有 Gradle 项目
-        run: |
-          cd media
-          echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
-          
-          echo "=== 所有可用项目 ==="
-          ./gradlew projects 2>&1 | head -150
-          
-          echo ""
-          echo "=== 查找 ffmpeg 相关项目 ==="
-          ./gradlew projects 2>&1 | grep -i ffmpeg || echo "没找到 ffmpeg 相关项目"
 
       - name: Download FFmpeg 5.1.10 source
         run: |
-          echo "=== 查找 jni 目录位置 ==="
-          find media -name "jni" -type d 2>/dev/null
-          
-          # 先假设路径是 libraries/decoder_ffmpeg/src/main/jni
-          # 如果不对，后面调试步骤会告诉我们正确路径
           JNI_DIR="media/libraries/decoder_ffmpeg/src/main/jni"
           
-          # 如果目录不存在，试试其他路径
-          if [ ! -d "$JNI_DIR" ]; then
-            echo "libraries/decoder_ffmpeg 路径不存在，尝试查找..."
-            JNI_DIR=$(find media -name "jni" -type d 2>/dev/null | head -1)
-            echo "找到 jni 目录：$JNI_DIR"
-          fi
-          
-          if [ -z "$JNI_DIR" ]; then
-            echo "❌ 没找到 jni 目录"
-            exit 1
-          fi
-          
-          echo "JNI 目录：$JNI_DIR"
-          cd "$JNI_DIR"
-          
           echo "=== 下载 FFmpeg 5.1.10 ==="
+          cd "$JNI_DIR"
           curl -L -o ffmpeg-5.1.10.tar.gz https://ffmpeg.org/releases/ffmpeg-5.1.10.tar.gz
           
           echo "=== 解压 ==="
           tar xzf ffmpeg-5.1.10.tar.gz
-          
-          # 创建软链接（build_ffmpeg.sh 期望目录名叫 ffmpeg）
           ln -s ffmpeg-5.1.10 ffmpeg
           
           echo "=== 验证 ==="
           ls -la ffmpeg/ | head -10
           echo "FFmpeg 版本：$(cat ffmpeg/VERSION)"
 
-      - name: 🔍 调试：查看 build_ffmpeg.sh 内容
-        run: |
-          # 查找 build_ffmpeg.sh
-          BUILD_SCRIPT=$(find media -name "build_ffmpeg.sh" 2>/dev/null | head -1)
-          
-          if [ -z "$BUILD_SCRIPT" ]; then
-            echo "❌ 没找到 build_ffmpeg.sh"
-            exit 1
-          fi
-          
-          echo "build_ffmpeg.sh 路径：$BUILD_SCRIPT"
-          
-          echo ""
-          echo "=== 前 100 行 ==="
-          head -100 "$BUILD_SCRIPT"
-          
-          echo ""
-          echo "=== 查找 ENABLED_DECODERS 相关内容 ==="
-          grep -n "ENABLED_DECODERS\|enabled_decoders\|decoder" "$BUILD_SCRIPT" | head -30 || echo "没找到"
-
       - name: Build FFmpeg native libraries
         run: |
           cd media
-          echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
           
-          # 查找 build_ffmpeg.sh
-          BUILD_SCRIPT=$(find . -name "build_ffmpeg.sh" 2>/dev/null | head -1)
-          echo "build_ffmpeg.sh 路径：$BUILD_SCRIPT"
+          # 模块路径（src/main 目录）
+          FFMPEG_MODULE_PATH="$(pwd)/libraries/decoder_ffmpeg/src/main"
+          echo "FFMPEG_MODULE_PATH=$FFMPEG_MODULE_PATH"
           
-          if [ -z "$BUILD_SCRIPT" ]; then
-            echo "❌ 没找到 build_ffmpeg.sh"
-            exit 1
-          fi
+          # NDK 路径
+          NDK_PATH="$ANDROID_SDK_ROOT/ndk/25.1.8937393"
+          echo "NDK_PATH=$NDK_PATH"
           
-          SCRIPT_DIR=$(dirname "$BUILD_SCRIPT")
-          cd "$SCRIPT_DIR"
+          # 主机平台
+          HOST_PLATFORM="linux-x86_64"
+          echo "HOST_PLATFORM=$HOST_PLATFORM"
           
-          echo "=== 编译 FFmpeg 原生库 ==="
-          echo "当前目录：$(pwd)"
+          # Android API 级别（注意：这是 API 级别，不是架构！）
+          ANDROID_API=21
+          echo "ANDROID_API=$ANDROID_API"
           
-          # 设置要编译的解码器（视频+音频）
-          # 注意：不同版本的脚本变量名可能不一样，先试试 ENABLED_DECODERS
-          export ENABLED_DECODERS="h264 hevc vp8 vp9 mpeg2video mpeg4 aac ac3 mp3 flac opus vorbis"
+          # 要启用的解码器（视频+音频）
+          DECODERS="h264 hevc vp8 vp9 mpeg2video mpeg4 aac ac3 mp3 flac opus vorbis"
+          echo "DECODERS=$DECODERS"
           
-          echo "ENABLED_DECODERS=$ENABLED_DECODERS"
+          # 进入脚本目录
+          cd libraries/decoder_ffmpeg/src/main/jni
           
-          # 编译两个架构
-          echo "=== 编译 arm64-v8a ==="
-          ./build_ffmpeg.sh arm64-v8a
-          
-          echo "=== 编译 armeabi-v7a ==="
-          ./build_ffmpeg.sh armeabi-v7a
-          
-          echo "=== 编译完成 ==="
-          
-          # 查看生成的 so 文件
           echo ""
-          echo "=== 生成的 so 文件 ==="
-          find . -name "*.so" 2>/dev/null | head -30
+          echo "=== 开始编译 FFmpeg ==="
+          ./build_ffmpeg.sh \
+              "$FFMPEG_MODULE_PATH" \
+              "$NDK_PATH" \
+              "$HOST_PLATFORM" \
+              "$ANDROID_API" \
+              $DECODERS
+          
+          echo ""
+          echo "=== 编译完成，查看输出 ==="
+          find "$FFMPEG_MODULE_PATH" -name "*.so" 2>/dev/null | head -30
+          
+          echo ""
+          echo "=== 各架构 so 文件大小 ==="
+          find "$FFMPEG_MODULE_PATH" -name "*.so" -exec du -h {} \;
 
       - name: Build AAR
         run: |
@@ -170,22 +103,21 @@ jobs:
           
           echo "=== 开始编译 AAR ==="
           
-          # 先试试 :lib-decoder-ffmpeg（根据之前的错误信息，模块名可能是这个）
-          # 如果不对，前面的调试步骤会告诉我们正确的模块名
-          MODULE=":lib-decoder-ffmpeg"
+          # 模块名是 :libraries:decoder_ffmpeg
+          MODULE=":libraries:decoder_ffmpeg"
+          echo "模块：$MODULE"
           
-          echo "尝试编译模块：$MODULE"
-          ./gradlew ${MODULE}:assembleRelease --info 2>&1 | tail -100
+          ./gradlew ${MODULE}:assembleRelease --stacktrace 2>&1 | tail -200
           
           echo ""
           echo "=== 查找 AAR 文件 ==="
           find . -name "*.aar" 2>/dev/null
           
           echo ""
-          echo "=== 查找 so 文件 ==="
-          find . -name "*.so" 2>/dev/null | head -30
+          echo "=== AAR 大小 ==="
+          find . -name "*.aar" -exec du -h {} \;
 
-      - name: 🔍 验证 AAR 内容
+      - name: 验证 AAR 内容
         run: |
           echo "=== 查找 AAR 文件 ==="
           AAR_FILE=$(find media -name "*.aar" 2>/dev/null | head -1)
@@ -204,9 +136,12 @@ jobs:
           
           echo ""
           echo "=== 检查是否有视频渲染器 ==="
-          # 解压 classes.jar 看看有没有 FfmpegVideoRenderer
-          unzip -p "$AAR_FILE" classes.jar > /tmp/classes.jar
-          jar tf /tmp/classes.jar | grep -i "ffmpeg\|video" | head -20 || echo "没找到"
+          unzip -p "$AAR_FILE" classes.jar > /tmp/classes.jar 2>/dev/null
+          if [ -f /tmp/classes.jar ]; then
+            jar tf /tmp/classes.jar | grep -i "ffmpeg\|video" | head -20 || echo "没找到 ffmpeg/video 相关类"
+          else
+            echo "没有 classes.jar"
+          fi
           
           echo ""
           echo "=== 检查 jni 目录 ==="
