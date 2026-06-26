@@ -1,211 +1,219 @@
-name: Build FFmpeg 5.1.10 Small+Filter AAR
+name: Build Media3 FFmpeg Extension (with video)
+
 on:
   push:
-    branches: [ master ]
-  pull_request:
+    branches: [ main ]
   workflow_dispatch:
-
-env:
-  # 12种视频解码 + 5种常用滤镜 + 极致体积优化（约11-12MB）
-  FFMPEG_FLAGS: >-
-    --disable-everything
-    --enable-decoder=h264
-    --enable-decoder=hevc
-    --enable-decoder=av1
-    --enable-decoder=vp8
-    --enable-decoder=vp9
-    --enable-decoder=mpeg4
-    --enable-decoder=mpeg2video
-    --enable-decoder=mpeg1video
-    --enable-decoder=flv
-    --enable-decoder=mjpeg
-    --enable-decoder=vc1
-    --enable-decoder=msmpeg4
-    --enable-decoder=aac
-    --enable-decoder=mp3
-    --enable-decoder=opus
-    --enable-decoder=vorbis
-    --enable-decoder=ac3
-    --enable-decoder=eac3
-    --enable-demuxer=mp4
-    --enable-demuxer=mov
-    --enable-demuxer=mkv
-    --enable-demuxer=avi
-    --enable-demuxer=flv
-    --enable-demuxer=mpegts
-    --enable-demuxer=hls
-    --enable-demuxer=rtsp
-    --enable-demuxer=rtmp
-    --enable-demuxer=ogg
-    --enable-demuxer=mp3
-    --enable-demuxer=aac
-    --enable-demuxer=asf
-    --enable-protocol=http
-    --enable-protocol=https
-    --enable-protocol=rtmp
-    --enable-protocol=rtsp
-    --enable-protocol=file
-    --enable-protocol=tcp
-    --enable-protocol=udp
-    --enable-protocol=hls
-    --enable-filter=scale
-    --enable-filter=format
-    --enable-filter=crop
-    --enable-filter=rotate
-    --enable-filter=transpose
-    --enable-filter=null
-    --enable-mediacodec
-    --enable-jni
-    --enable-hwaccels
-    --enable-neon
-    --enable-asm
-    --enable-shared
-    --disable-static
-    --disable-programs
-    --disable-ffmpeg
-    --disable-ffplay
-    --disable-ffprobe
-    --disable-doc
-    --disable-htmlpages
-    --disable-manpages
-    --disable-podpages
-    --disable-txtpages
-    --enable-stripping
-    --enable-small
-    --disable-debug
-    --disable-avdevice
-    --disable-postproc
-    --disable-iconv
-    --disable-bzlib
-    --disable-zlib
-    --disable-lzma
-    --disable-symver
-    --extra-cflags="-Os -fvisibility=hidden -fdata-sections -ffunction-sections"
-    --extra-ldflags="-Os -Wl,--gc-sections -Wl,--strip-all"
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        abi: [ "armeabi-v7a", "arm64-v8a" ]
-      fail-fast: false
+    runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Install build dependencies
+      - name: Checkout Media3 source
         run: |
-          sudo apt update -y
-          sudo apt install nasm yasm git wget unzip zip tar make gcc
+          echo "=== 克隆 Media3 1.7.1 ==="
+          git clone --depth 1 --branch 1.7.1 https://github.com/androidx/media.git media
+          cd media
+          echo "当前目录：$(pwd)"
+          ls -la
 
-      - name: Setup Android NDK r25c
-        run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
-          unzip -q android-ndk-r25c-linux.zip
-          echo "ANDROID_NDK_LATEST_HOME=$PWD/android-ndk-r25c" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$PWD/android-ndk-r25c" >> $GITHUB_ENV
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-      - name: Compile FFmpeg ABI ${{ matrix.abi }}
-        run: |
-          export ANDROID_SDK_HOME=$ANDROID_HOME
-          export ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME
-          export EXTRA_BUILD_CONFIGURATION_FLAGS="${{ env.FFMPEG_FLAGS }}"
-          echo "=== FFmpeg 配置参数 ==="
-          echo "$EXTRA_BUILD_CONFIGURATION_FLAGS"
-          ./ffmpeg-android-maker.sh -android=21 -abis=${{ matrix.abi }}
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: 超级深度 Strip
+      - name: Install NDK
         run: |
-          STRIP_TOOL=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
-          echo "=== 超级深度 strip ==="
-          find ./output -name "*.so" -type f 2>/dev/null | while read sofile; do
-            echo "Strip: $sofile"
-            $STRIP_TOOL --strip-all "$sofile" 2>/dev/null
-            $STRIP_TOOL --remove-section=.comment "$sofile" 2>/dev/null
-            $STRIP_TOOL --remove-section=.note "$sofile" 2>/dev/null
-            echo "  大小: $(du -h "$sofile" | cut -f1)"
-          done
-          echo "=== strip 完成 ==="
+          echo "=== 安装 NDK 25.1.8937393 ==="
+          # Media3 1.7.1 build.gradle 里指定的 NDK 版本
+          sdkmanager "ndk;25.1.8937393"
+          
+          echo "=== 已安装的 NDK ==="
+          ls $ANDROID_SDK_ROOT/ndk/
+          
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.1.8937393" >> $GITHUB_ENV
 
-      - name: 探测输出目录
-        id: find_output
+      - name: 🔍 调试：查看项目结构
         run: |
-          SO_PATH=$(find ./output -name "libavcodec.so" -type f 2>/dev/null | head -1)
-          if [ -z "$SO_PATH" ]; then
-            echo "❌ 未找到 libavcodec.so"
-            find ./output -name "*.so" -type f 2>/dev/null | head -20
+          cd media
+          
+          echo "=== 根目录 ==="
+          ls -la
+          
+          echo ""
+          echo "=== 查找 decoder_ffmpeg 相关目录 ==="
+          find . -name "*decoder*ffmpeg*" -type d 2>/dev/null
+          find . -name "*ffmpeg*" -type d 2>/dev/null | head -20
+          
+          echo ""
+          echo "=== 查找 build_ffmpeg.sh ==="
+          find . -name "build_ffmpeg.sh" 2>/dev/null
+
+      - name: 🔍 调试：列出所有 Gradle 项目
+        run: |
+          cd media
+          echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
+          
+          echo "=== 所有可用项目 ==="
+          ./gradlew projects 2>&1 | head -150
+          
+          echo ""
+          echo "=== 查找 ffmpeg 相关项目 ==="
+          ./gradlew projects 2>&1 | grep -i ffmpeg || echo "没找到 ffmpeg 相关项目"
+
+      - name: Download FFmpeg 5.1.10 source
+        run: |
+          echo "=== 查找 jni 目录位置 ==="
+          find media -name "jni" -type d 2>/dev/null
+          
+          # 先假设路径是 libraries/decoder_ffmpeg/src/main/jni
+          # 如果不对，后面调试步骤会告诉我们正确路径
+          JNI_DIR="media/libraries/decoder_ffmpeg/src/main/jni"
+          
+          # 如果目录不存在，试试其他路径
+          if [ ! -d "$JNI_DIR" ]; then
+            echo "libraries/decoder_ffmpeg 路径不存在，尝试查找..."
+            JNI_DIR=$(find media -name "jni" -type d 2>/dev/null | head -1)
+            echo "找到 jni 目录：$JNI_DIR"
+          fi
+          
+          if [ -z "$JNI_DIR" ]; then
+            echo "❌ 没找到 jni 目录"
             exit 1
           fi
-          echo "✅ 找到: $SO_PATH"
-          ABI_DIR=$(dirname $(dirname "$SO_PATH"))
-          ABI_DIR=${ABI_DIR#./}
-          echo "OUTPUT_ABI_DIR=$ABI_DIR" >> $GITHUB_ENV
-
-      - name: 打印体积统计
-        run: |
-          echo "=== 各 so 文件大小 ==="
-          find ${{ env.OUTPUT_ABI_DIR }} -name "*.so" -exec du -h {} \;
-          echo "=== 单架构总大小 ==="
-          du -sh ${{ env.OUTPUT_ABI_DIR }}/
-
-      - name: Upload build output ${{ matrix.abi }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: output-${{ matrix.abi }}
-          path: ${{ env.OUTPUT_ABI_DIR }}/
-
-  package_aar:
-    needs: build
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Download armeabi-v7a
-        uses: actions/download-artifact@v4
-        with:
-          name: output-armeabi-v7a
-          path: ffmpeg-libs/armeabi-v7a
-
-      - name: Download arm64-v8a
-        uses: actions/download-artifact@v4
-        with:
-          name: output-arm64-v8a
-          path: ffmpeg-libs/arm64-v8a
-
-      - name: Package AAR
-        run: |
-          mkdir -p aar/libs/armeabi-v7a aar/libs/arm64-v8a
-
-          V7A_SO=$(find ffmpeg-libs/armeabi-v7a -name "libavcodec.so" -type f 2>/dev/null | head -1)
-          V8A_SO=$(find ffmpeg-libs/arm64-v8a -name "libavcodec.so" -type f 2>/dev/null | head -1)
           
-          V7A_LIB=$(dirname "$V7A_SO")
-          V8A_LIB=$(dirname "$V8A_SO")
+          echo "JNI 目录：$JNI_DIR"
+          cd "$JNI_DIR"
           
-          echo "armeabi-v7a: $V7A_LIB"
-          echo "arm64-v8a: $V8A_LIB"
+          echo "=== 下载 FFmpeg 5.1.10 ==="
+          curl -L -o ffmpeg-5.1.10.tar.gz https://ffmpeg.org/releases/ffmpeg-5.1.10.tar.gz
+          
+          echo "=== 解压 ==="
+          tar xzf ffmpeg-5.1.10.tar.gz
+          
+          # 创建软链接（build_ffmpeg.sh 期望目录名叫 ffmpeg）
+          ln -s ffmpeg-5.1.10 ffmpeg
+          
+          echo "=== 验证 ==="
+          ls -la ffmpeg/ | head -10
+          echo "FFmpeg 版本：$(cat ffmpeg/VERSION)"
 
-          cp $V7A_LIB/lib*.so aar/libs/armeabi-v7a/
-          cp $V8A_LIB/lib*.so aar/libs/arm64-v8a/
+      - name: 🔍 调试：查看 build_ffmpeg.sh 内容
+        run: |
+          # 查找 build_ffmpeg.sh
+          BUILD_SCRIPT=$(find media -name "build_ffmpeg.sh" 2>/dev/null | head -1)
+          
+          if [ -z "$BUILD_SCRIPT" ]; then
+            echo "❌ 没找到 build_ffmpeg.sh"
+            exit 1
+          fi
+          
+          echo "build_ffmpeg.sh 路径：$BUILD_SCRIPT"
+          
+          echo ""
+          echo "=== 前 100 行 ==="
+          head -100 "$BUILD_SCRIPT"
+          
+          echo ""
+          echo "=== 查找 ENABLED_DECODERS 相关内容 ==="
+          grep -n "ENABLED_DECODERS\|enabled_decoders\|decoder" "$BUILD_SCRIPT" | head -30 || echo "没找到"
 
-          echo "=== AAR 内各 so 大小 ==="
-          find aar -name "*.so" -exec du -h {} \;
+      - name: Build FFmpeg native libraries
+        run: |
+          cd media
+          echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
+          
+          # 查找 build_ffmpeg.sh
+          BUILD_SCRIPT=$(find . -name "build_ffmpeg.sh" 2>/dev/null | head -1)
+          echo "build_ffmpeg.sh 路径：$BUILD_SCRIPT"
+          
+          if [ -z "$BUILD_SCRIPT" ]; then
+            echo "❌ 没找到 build_ffmpeg.sh"
+            exit 1
+          fi
+          
+          SCRIPT_DIR=$(dirname "$BUILD_SCRIPT")
+          cd "$SCRIPT_DIR"
+          
+          echo "=== 编译 FFmpeg 原生库 ==="
+          echo "当前目录：$(pwd)"
+          
+          # 设置要编译的解码器（视频+音频）
+          # 注意：不同版本的脚本变量名可能不一样，先试试 ENABLED_DECODERS
+          export ENABLED_DECODERS="h264 hevc vp8 vp9 mpeg2video mpeg4 aac ac3 mp3 flac opus vorbis"
+          
+          echo "ENABLED_DECODERS=$ENABLED_DECODERS"
+          
+          # 编译两个架构
+          echo "=== 编译 arm64-v8a ==="
+          ./build_ffmpeg.sh arm64-v8a
+          
+          echo "=== 编译 armeabi-v7a ==="
+          ./build_ffmpeg.sh armeabi-v7a
+          
+          echo "=== 编译完成 ==="
+          
+          # 查看生成的 so 文件
+          echo ""
+          echo "=== 生成的 so 文件 ==="
+          find . -name "*.so" 2>/dev/null | head -30
 
-          cat > aar/AndroidManifest.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest package="com.ffmpeg.lib" xmlns:android="http://schemas.android.com/apk/res/android">
-          <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="36"/>
-          </manifest>
-          EOF
+      - name: Build AAR
+        run: |
+          cd media
+          echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
+          
+          echo "=== 开始编译 AAR ==="
+          
+          # 先试试 :lib-decoder-ffmpeg（根据之前的错误信息，模块名可能是这个）
+          # 如果不对，前面的调试步骤会告诉我们正确的模块名
+          MODULE=":lib-decoder-ffmpeg"
+          
+          echo "尝试编译模块：$MODULE"
+          ./gradlew ${MODULE}:assembleRelease --info 2>&1 | tail -100
+          
+          echo ""
+          echo "=== 查找 AAR 文件 ==="
+          find . -name "*.aar" 2>/dev/null
+          
+          echo ""
+          echo "=== 查找 so 文件 ==="
+          find . -name "*.so" 2>/dev/null | head -30
 
-          cd aar
-          zip -r -9 ffmpeg-5.1.10-small-filter.aar AndroidManifest.xml libs
-
-          echo "=== 最终 AAR 大小 ==="
-          du -h ffmpeg-5.1.10-small-filter.aar
+      - name: 🔍 验证 AAR 内容
+        run: |
+          echo "=== 查找 AAR 文件 ==="
+          AAR_FILE=$(find media -name "*.aar" 2>/dev/null | head -1)
+          
+          if [ -z "$AAR_FILE" ]; then
+            echo "❌ 没找到 AAR 文件"
+            exit 1
+          fi
+          
+          echo "AAR 文件：$AAR_FILE"
+          echo "大小：$(du -h "$AAR_FILE" | cut -f1)"
+          
+          echo ""
+          echo "=== AAR 内容列表 ==="
+          unzip -l "$AAR_FILE"
+          
+          echo ""
+          echo "=== 检查是否有视频渲染器 ==="
+          # 解压 classes.jar 看看有没有 FfmpegVideoRenderer
+          unzip -p "$AAR_FILE" classes.jar > /tmp/classes.jar
+          jar tf /tmp/classes.jar | grep -i "ffmpeg\|video" | head -20 || echo "没找到"
+          
+          echo ""
+          echo "=== 检查 jni 目录 ==="
+          unzip -l "$AAR_FILE" | grep -i "jni\|so" | head -20 || echo "没找到 jni/so"
 
       - name: Upload AAR
         uses: actions/upload-artifact@v4
         with:
-          name: FFmpeg5.1.10-SmallFilter-AAR
-          path: aar/ffmpeg-5.1.10-small-filter.aar
+          name: lib-decoder-ffmpeg-release-with-video
+          path: media/**/*.aar
