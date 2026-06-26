@@ -111,39 +111,36 @@ jobs:
           export EXTRA_BUILD_CONFIGURATION_FLAGS="${{ env.FFMPEG_FLAGS }}"
           echo "=== FFmpeg 配置参数 ==="
           echo "$EXTRA_BUILD_CONFIGURATION_FLAGS"
-          # 关键：去掉 -all-free -all-gpl，不编译第三方库，只用FFmpeg内置解码
           ./ffmpeg-android-maker.sh -android=21 -abis=${{ matrix.abi }}
 
       - name: 深度 Strip 减小体积
         run: |
           STRIP_TOOL=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
-          echo "=== 深度 strip 所有 so ==="
-          find . -name "*.so" -type f 2>/dev/null | while read sofile; do
+          echo "=== 深度 strip FFmpeg so 文件 ==="
+          # 只 strip output 目录下的 so，不碰 NDK 系统库
+          find ./output -name "*.so" -type f 2>/dev/null | while read sofile; do
             echo "Strip: $sofile"
-            $STRIP_TOOL --strip-all "$sofile" 2>/dev/null
+            $STRIP_TOOL --strip-all "$sofile" 2>/dev/null || echo "跳过: $sofile"
           done
+          echo "=== strip 完成 ==="
 
       - name: 探测实际输出目录
         id: find_output
         run: |
           echo "=== 查找编译产物 ==="
-          SO_PATH=$(find . -name "libavcodec.so" -type f 2>/dev/null | head -1)
+          SO_PATH=$(find ./output -name "libavcodec.so" -type f 2>/dev/null | head -1)
           
           if [ -z "$SO_PATH" ]; then
             echo "❌ 未找到 libavcodec.so"
-            find . -name "*.so" -type f 2>/dev/null | head -20
+            find ./output -name "*.so" -type f 2>/dev/null | head -20
             exit 1
           fi
           
           echo "✅ 找到: $SO_PATH"
-          SO_DIR=$(dirname "$SO_PATH")
-          SO_DIR_NAME=$(basename "$SO_DIR")
           
-          if [ "$SO_DIR_NAME" = "lib" ]; then
-            ABI_DIR=$(dirname "$SO_DIR")
-          else
-            ABI_DIR="$SO_DIR"
-          fi
+          # 向上两级就是 ABI 目录 (libavcodec.so → lib → arm64-v8a)
+          ABI_DIR=$(dirname $(dirname "$SO_PATH"))
+          echo "ABI 输出目录: $ABI_DIR"
           
           ABI_DIR=${ABI_DIR#./}
           echo "OUTPUT_ABI_DIR=$ABI_DIR" >> $GITHUB_ENV
@@ -151,7 +148,7 @@ jobs:
       - name: 打印体积统计
         run: |
           echo "=== 各 so 文件大小 ==="
-          du -h ${{ env.OUTPUT_ABI_DIR }}/*.so 2>/dev/null || du -h ${{ env.OUTPUT_ABI_DIR }}/lib/*.so 2>/dev/null
+          find ${{ env.OUTPUT_ABI_DIR }} -name "*.so" -exec du -h {} \;
           echo "=== 单架构总大小 ==="
           du -sh ${{ env.OUTPUT_ABI_DIR }}/
 
@@ -179,35 +176,39 @@ jobs:
           name: output-arm64-v8a
           path: ffmpeg-libs/arm64-v8a
 
+      - name: 检查下载的产物
+        run: |
+          echo "=== armeabi-v7a ==="
+          find ffmpeg-libs/armeabi-v7a -name "*.so" -exec du -h {} \;
+          echo "=== arm64-v8a ==="
+          find ffmpeg-libs/arm64-v8a -name "*.so" -exec du -h {} \;
+
       - name: Package AAR
         run: |
           mkdir -p aar/libs/armeabi-v7a aar/libs/arm64-v8a
 
-          find_lib_dir() {
-            if [ -f "$1/libavcodec.so" ]; then
-              echo "$1"
-            elif [ -f "$1/lib/libavcodec.so" ]; then
-              echo "$1/lib"
-            else
-              echo "$1"
-            fi
-          }
+          # 查找 so 文件实际位置
+          V7A_SO=$(find ffmpeg-libs/armeabi-v7a -name "libavcodec.so" -type f 2>/dev/null | head -1)
+          V8A_SO=$(find ffmpeg-libs/arm64-v8a -name "libavcodec.so" -type f 2>/dev/null | head -1)
+          
+          V7A_LIB=$(dirname "$V7A_SO")
+          V8A_LIB=$(dirname "$V8A_SO")
+          
+          echo "armeabi-v7a lib 目录: $V7A_LIB"
+          echo "arm64-v8a lib 目录: $V8A_LIB"
 
-          V7A_LIB=$(find_lib_dir "ffmpeg-libs/armeabi-v7a")
-          V8A_LIB=$(find_lib_dir "ffmpeg-libs/arm64-v8a")
-
-          cp $V7A_LIB/lib*.so aar/libs/armeabi-v7a/ 2>/dev/null || cp $V7A_LIB/*.so aar/libs/armeabi-v7a/ 2>/dev/null
-          cp $V8A_LIB/lib*.so aar/libs/arm64-v8a/ 2>/dev/null || cp $V8A_LIB/*.so aar/libs/arm64-v8a/ 2>/dev/null
+          cp $V7A_LIB/lib*.so aar/libs/armeabi-v7a/
+          cp $V8A_LIB/lib*.so aar/libs/arm64-v8a/
 
           echo "=== AAR 内 so 文件 ==="
           find aar -name "*.so" -exec du -h {} \;
 
           cat > aar/AndroidManifest.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest package="com.ffmpeg.lib" xmlns:android="http://schemas.android.com/apk/res/android">
-          <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="36"/>
-          </manifest>
-          EOF
+<?xml version="1.0" encoding="utf-8"?>
+<manifest package="com.ffmpeg.lib" xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="36"/>
+</manifest>
+EOF
 
           cd aar
           zip -r ffmpeg-5.1.10-12video.aar AndroidManifest.xml libs
