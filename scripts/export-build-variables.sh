@@ -5,13 +5,8 @@ function max() {
 }
 
 export ANDROID_ABI=$1
-
-if [ $ANDROID_ABI = "arm64-v8a" ] || [ $ANDROID_ABI = "x86_64" ] ; then
-  # For 64bit we use value not less than 21
-  export ANDROID_PLATFORM=$(max ${DESIRED_ANDROID_API_LEVEL} 21)
-else
-  export ANDROID_PLATFORM=${DESIRED_ANDROID_API_LEVEL}
-fi
+# 全局强制所有ABI最低API=21，适配FFmpeg5.1.10 NDK编译要求
+export ANDROID_PLATFORM=$(max ${DESIRED_ANDROID_API_LEVEL} 21)
 
 export TOOLCHAIN_PATH=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/${HOST_TAG}
 export SYSROOT_PATH=${TOOLCHAIN_PATH}/sysroot
@@ -22,7 +17,7 @@ export TARGET_TRIPLE_OS="android"
 
 case $ANDROID_ABI in
   armeabi-v7a)
-    #cc       armv7a-linux-androideabi16-clang
+    #cc       armv7a-linux-androideabi21-clang
     export TARGET_TRIPLE_MACHINE_ARCH=arm
     TARGET_TRIPLE_MACHINE_CC=armv7a
     export TARGET_TRIPLE_OS=androideabi
@@ -32,7 +27,7 @@ case $ANDROID_ABI in
     export TARGET_TRIPLE_MACHINE_ARCH=aarch64
     ;;
   x86)
-    #cc       i686-linux-android16-clang
+    #cc       i686-linux-android21-clang
     export TARGET_TRIPLE_MACHINE_ARCH=i686
     CPU_FAMILY=x86
     ;;
@@ -71,7 +66,7 @@ export FAM_CC=${TOOLCHAIN_PATH}/bin/${TARGET}-clang
 export FAM_CXX=${FAM_CC}++
 export FAM_LD=${FAM_CC}
 
-# TODO consider abondaning this strategy of defining the name of the clang wrapper
+# TODO consider abondaning this strategy of defining the clang wrapper
 # in favour of just passing -mstackrealign and -fno-addrsig depending on
 # ANDROID_ABI, ANDROID_PLATFORM and NDK's version
 
@@ -81,8 +76,27 @@ export FAM_YASM=${TOOLCHAIN_PATH}/bin/yasm
 # A variable to which certain dependencies can add -l arguments during build.sh
 export FFMPEG_EXTRA_LD_FLAGS=
 
-# A variable to which certain dependencies can add addtional arguments during ffmpeg build.sh
-export EXTRA_BUILD_CONFIGURATION_FLAGS=
+# ===================== 新增：全解码核心参数注入 =====================
+# FFmpeg 5.1.10 开启全部音视频解码、封装、协议、滤镜
+export EXTRA_BUILD_CONFIGURATION_FLAGS="\
+--enable-decoder=all \
+--enable-demuxer=all \
+--enable-protocol=all \
+--enable-filter=all \
+--enable-mediacodec \
+--enable-jni \
+--enable-hwaccels \
+--enable-neon \
+--enable-gpl \
+--enable-nonfree \
+--enable-shared \
+--disable-static \
+--disable-programs \
+--disable-ffmpeg \
+--disable-ffplay \
+--disable-ffprobe \
+--disable-doc"
+# ===================================================================
 
 export INSTALL_DIR=${BUILD_DIR_EXTERNAL}/${ANDROID_ABI}
 
