@@ -5,6 +5,37 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  FFMPEG_FULL_DECODE_FLAGS: >-
+    --enable-decoder=all
+    --enable-encoder=all
+    --enable-demuxer=all
+    --enable-muxer=all
+    --enable-protocol=all
+    --enable-filter=all
+    --enable-parsers=all
+    --enable-bsfs=all
+    --enable-mediacodec
+    --enable-jni
+    --enable-hwaccels
+    --enable-neon
+    --enable-asm
+    --enable-inline-asm
+    --enable-gpl
+    --enable-version3
+    --enable-nonfree
+    --enable-shared
+    --disable-static
+    --disable-programs
+    --disable-ffmpeg
+    --disable-ffplay
+    --disable-ffprobe
+    --disable-doc
+    --disable-htmlpages
+    --disable-manpages
+    --disable-podpages
+    --disable-txtpages
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -31,13 +62,25 @@ jobs:
         run: |
           export ANDROID_SDK_HOME=$ANDROID_HOME
           export ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME
+          export EXTRA_BUILD_CONFIGURATION_FLAGS="${{ env.FFMPEG_FULL_DECODE_FLAGS }}"
+          echo "=== FFmpeg 全量解码配置已注入 ==="
+          echo "$EXTRA_BUILD_CONFIGURATION_FLAGS"
           ./ffmpeg-android-maker.sh -all-free -all-gpl -android=21 -abis=${{ matrix.abi }}
+
+      - name: 验证全量解码配置生效
+        run: |
+          echo "=== 查找 FFmpeg 配置日志 ==="
+          find . -name "config.log" -type f 2>/dev/null | head -5
+          echo "=== 查找 config.h ==="
+          find . -name "config.h" -type f 2>/dev/null | head -5
+          echo "=== 统计编译生成的 so 数量 ==="
+          find . -name "libav*.so" -type f 2>/dev/null | wc -l
+          find . -name "libav*.so" -type f 2>/dev/null
 
       - name: 探测实际输出目录
         id: find_output
         run: |
           echo "=== 查找编译产物位置 ==="
-          # 查找 libavcodec.so 来定位输出目录
           SO_PATH=$(find . -name "libavcodec.so" -type f 2>/dev/null | head -1)
           
           if [ -z "$SO_PATH" ]; then
@@ -50,13 +93,18 @@ jobs:
           
           echo "✅ 找到 so 文件: $SO_PATH"
           
-          # 向上两级就是 ABI 目录 (lib/../)
-          ABI_DIR=$(dirname $(dirname "$SO_PATH"))
+          # 智能判断：父目录是 lib 就再往上一级，否则就用父目录
+          SO_DIR=$(dirname "$SO_PATH")
+          SO_DIR_NAME=$(basename "$SO_DIR")
+          
+          if [ "$SO_DIR_NAME" = "lib" ]; then
+            ABI_DIR=$(dirname "$SO_DIR")
+          else
+            ABI_DIR="$SO_DIR"
+          fi
+          
           echo "ABI 输出目录: $ABI_DIR"
-          
-          # 规范化路径（去掉开头的 ./）
           ABI_DIR=${ABI_DIR#./}
-          
           echo "OUTPUT_ABI_DIR=$ABI_DIR" >> $GITHUB_ENV
           echo "OUTPUT_ABI_DIR=$ABI_DIR" >> $GITHUB_OUTPUT
 
@@ -64,8 +112,8 @@ jobs:
         run: |
           echo "=== 输出目录结构 ==="
           ls -la ${{ env.OUTPUT_ABI_DIR }}/
-          echo "=== lib 目录 ==="
-          ls -la ${{ env.OUTPUT_ABI_DIR }}/lib/
+          echo "=== 所有 .so 文件 ==="
+          ls -la ${{ env.OUTPUT_ABI_DIR }}/*.so 2>/dev/null || ls -la ${{ env.OUTPUT_ABI_DIR }}/lib/*.so 2>/dev/null
           echo "=== include 目录 ==="
           ls -la ${{ env.OUTPUT_ABI_DIR }}/include/ 2>/dev/null || echo "无include目录"
 
@@ -99,26 +147,25 @@ jobs:
           ls -la ffmpeg-libs/armeabi-v7a/
           echo "=== arm64-v8a ==="
           ls -la ffmpeg-libs/arm64-v8a/
-          echo "=== armeabi-v7a lib ==="
-          ls -la ffmpeg-libs/armeabi-v7a/lib/ 2>/dev/null || ls -la ffmpeg-libs/armeabi-v7a/
-          echo "=== arm64-v8a lib ==="
-          ls -la ffmpeg-libs/arm64-v8a/lib/ 2>/dev/null || ls -la ffmpeg-libs/armeabi-v7a/
+          echo "=== armeabi-v7a so文件 ==="
+          ls -la ffmpeg-libs/armeabi-v7a/*.so 2>/dev/null || ls -la ffmpeg-libs/armeabi-v7a/lib/*.so 2>/dev/null
+          echo "=== arm64-v8a so文件 ==="
+          ls -la ffmpeg-libs/arm64-v8a/*.so 2>/dev/null || ls -la ffmpeg-libs/arm64-v8a/lib/*.so 2>/dev/null
 
       - name: Package full AAR library
         run: |
-          # 创建 AAR 目录结构
           mkdir -p aar/libs/armeabi-v7a aar/libs/arm64-v8a aar/headers
 
-          # 自动查找 so 文件位置（兼容有lib目录和无lib目录两种情况）
           find_lib_dir() {
-            if [ -d "$1/lib" ]; then
+            if [ -f "$1/libavcodec.so" ]; then
+              echo "$1"
+            elif [ -f "$1/lib/libavcodec.so" ]; then
               echo "$1/lib"
             else
               echo "$1"
             fi
           }
 
-          # 自动查找 include 目录位置
           find_include_dir() {
             if [ -d "$1/include" ]; then
               echo "$1/include"
@@ -135,25 +182,20 @@ jobs:
           echo "arm64-v8a lib 目录: $V8A_LIB"
           echo "头文件目录: $V8A_INC"
 
-          # 复制头文件（以 arm64-v8a 为准）
           cp -r $V8A_INC/* aar/headers/ 2>/dev/null || echo "警告: 未找到头文件"
-
-          # 复制动态库
           cp $V7A_LIB/lib*.so aar/libs/armeabi-v7a/ 2>/dev/null || cp $V7A_LIB/*.so aar/libs/armeabi-v7a/ 2>/dev/null
           cp $V8A_LIB/lib*.so aar/libs/arm64-v8a/ 2>/dev/null || cp $V8A_LIB/*.so aar/libs/arm64-v8a/ 2>/dev/null
 
           echo "=== 复制后的 AAR 结构 ==="
           find aar -type f | head -30
 
-          # 生成清单文件
           cat > aar/AndroidManifest.xml <<'EOF'
-          <?xml     version="1.0" encoding="utf-8"?>
+          <?xml version="1.0" encoding="utf-8"?>
           <manifest package="com.ffmpeg.lib" xmlns:android="http://schemas.android.com/apk/res/android">
           <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="36"/>
           </manifest>
-           EOF
+          EOF
 
-          # 打包 AAR
           cd aar
           zip -r ffmpeg-5.1.10-full-decode.aar AndroidManifest.xml libs headers
 
