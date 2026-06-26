@@ -204,11 +204,11 @@ jobs:
           find aar -name "*.so" -exec du -h {} \;
 
           cat > aar/AndroidManifest.xml <<'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<manifest package="com.ffmpeg.lib" xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="36"/>
-</manifest>
-EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest package="com.ffmpeg.lib" xmlns:android="http://schemas.android.com/apk/res/android">
+          <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="36"/>
+          </manifest>
+          EOF
 
           cd aar
           zip -r ffmpeg-5.1.10-12video.aar AndroidManifest.xml libs
