@@ -64,16 +64,16 @@ jobs:
           cp build-output/armeabi-v7a/lib/lib*.so aar/libs/armeabi-v7a/
           cp build-output/arm64-v8a/lib/lib*.so aar/libs/arm64-v8a/
           cat > aar/AndroidManifest.xml <<'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<manifest package="com.ffmpeg.lib" xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="36"/>
-</manifest>
-EOF
-          cd aar
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest package="com.ffmpeg.lib" xmlns:android="http://schemas.android.com/apk/res/android">
+          <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="36"/>
+          </manifest>
+             cd aar
           zip -r ffmpeg-5.1.10-full-decode.aar AndroidManifest.xml libs headers
 
       - name: Upload compiled AAR
         uses: actions/upload-artifact@v4
         with:
+
           name: FFmpeg5.1.10-FullDecode-AAR
           path: aar/ffmpeg-5.1.10-full-decode.aar
