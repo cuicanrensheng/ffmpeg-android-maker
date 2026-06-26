@@ -101,10 +101,14 @@ jobs:
           cd media
           echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
           
+          echo "=== 列出所有 Gradle 项目（调试用） ==="
+          ./gradlew projects 2>&1 | grep -i "ffmpeg\|decoder" || echo "没找到 ffmpeg/decoder 相关项目"
+          
+          echo ""
           echo "=== 开始编译 AAR ==="
           
-          # 模块名是 :libraries:decoder_ffmpeg
-          MODULE=":libraries:decoder_ffmpeg"
+          # 模块名是 :lib-decoder-ffmpeg
+          MODULE=":lib-decoder-ffmpeg"
           echo "模块：$MODULE"
           
           ./gradlew ${MODULE}:assembleRelease --stacktrace 2>&1 | tail -200
